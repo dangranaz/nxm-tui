@@ -53,3 +53,12 @@ Coding rules for this project. Every contributor (human or AI) must follow these
 
 - Follow Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `perf:`, `chore:`.
 - One logical change per commit. Don't mix features with refactors.
+
+
+## Project Documents
+
+- **Plans, designs, loops, and handoffs** go in `nxm-ai/nxm-projects` (not here).
+- This repo keeps only: RULES.md, CONTEXT.md, STATUS.md, CHANGELOG.md.
+- When starting a multi-session effort, create a plan in `nxm-projects/plans/active/`.
+- When ending a long session, create a handoff in `nxm-projects/handoffs/active/`.
+- When running an iterative loop, document it in `nxm-projects/loops/active/`.
