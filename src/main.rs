@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 mod app;
+mod agent;
 mod autocomplete;
 mod bottom;
 mod config;
