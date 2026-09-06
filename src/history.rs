@@ -53,6 +53,13 @@ pub fn render_history(f: &mut Frame, app: &App, area: Rect) {
                 )));
                 lines.push(Line::from(""));
             }
+            Role::Tool => {
+                lines.push(Line::from(vec![
+                    Span::styled(" ◀ tool ", Style::default().fg(Color::Cyan)),
+                    Span::styled(msg.content.clone(), Style::default().fg(Color::Rgb(180, 180, 80))),
+                ]));
+                lines.push(Line::from(""));
+            }
         }
     }
 

@@ -1,74 +1,91 @@
-//! Agentic streaming loop for `nexum-tui` (P2 spike).
+//! Agentic streaming loop for `nexum-tui` (P2-proper).
 //!
-//! Today `connection::chat_stream` only forwards text deltas. This module is a
-//! *spike* that proves the agentic loop compiles against the real `nxm-tui`
-//! types and that the OpenAI tool-call delta parser is correct:
-//! stream → parse `tool_calls` → stub-dispatch → append result → re-query →
-//! repeat until the model stops. It is **not yet wired** into the ratatui event
-//! loop (that is P2-proper); `#[allow(dead_code)]` keeps the build clean.
+//! Replaces the single-turn `connection::chat_stream` path: [`Agent::run`]
+//! streams a response, resolves any `tool_calls` through `nexum-tools`,
+//! appends the `role:"tool"` results to its transcript, and re-queries until
+//! the model emits `finish_reason: "stop"`.
 //!
-//! Types used: `app::{App, Message, Role}`, `tool_types::{ToolPart,
-//! ToolInvocation, ToolResult}`, the `mpsc::UnboundedSender<ToolPart>` the loop
-//! will emit on, and `reqwest::Client` (already a dep).
-
-#![allow(dead_code)] // wired into the event loop in P2-proper
+//! Concurrency model: the `Agent` lives inside a `tokio::spawn` task and owns
+//! its own transcript (`Vec<Message>`, cloned from `app.messages` at spawn).
+//! It never borrows `&mut App`; it emits [`ToolPart`]s over `tx` and the main
+//! ratatui loop mirrors them into `app.messages` (see `main.rs`). Text deltas
+//! are absorbed into the agent transcript with [`app::apply_token`] (the same
+//! helper the main loop uses), so `<thinking>`-tag filtering stays consistent.
+//!
+//! Rule: no `unwrap`/`expect` in prod — fallible parsing maps to `String` errors.
 
 use std::collections::HashMap;
 
 use futures::StreamExt;
+use nxm_tools::{default_registry, Registry, ToolResult as NxToolResult};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::app::{App, Message, Role};
+use crate::app::{apply_token, Message, Role};
 use crate::tool_types::{ToolInvocation, ToolPart, ToolResult};
 
-/// A minimal streaming OpenAI-compatible agent.
+/// A streaming OpenAI-compatible agent backed by `nexum-tools`.
 pub struct Agent<'a> {
     client: &'a Client,
     base_url: &'a str,
     model: &'a str,
+    registry: Registry,
+    /// Growing transcript. Cloned from `app.messages` at spawn and evolved
+    /// across turns (assistant tool-call messages + their `role:"tool"` results)
+    /// so each request serializes the full conversation.
+    transcript: Vec<Message>,
+    /// Local mirrors of `App.{in_thinking, thinking_content}`. Only fed to
+    /// `apply_token` (which writes them) so the transcript is `<thinking>`-clean;
+    /// the *live* reasoning display is driven by `App` via the main loop.
+    #[allow(dead_code)]
+    in_thinking: bool,
+    #[allow(dead_code)]
+    thinking_content: String,
 }
 
 impl<'a> Agent<'a> {
-    pub fn new(client: &'a Client, base_url: &'a str, model: &'a str) -> Self {
-        Self { client, base_url, model }
-    }
-
-    /// Run an agentic turn: stream a response, resolve any tool calls, and keep
-    /// going until the model emits no more tool calls. Sends `ToolPart`s over
-    /// `tx` so the UI can render incrementally. Mutates `app.messages` with the
-    /// transcript (assistant tool-call turns + stub tool results).
-    pub async fn run(
-        &self,
-        app: &mut App,
-        tx: &mpsc::UnboundedSender<ToolPart>,
-    ) -> Result<(), String> {
-        loop {
-            let calls = self.stream_turn(app, tx).await?;
-            if calls.is_empty() {
-                return Ok(());
-            }
-            // Spike: every tool call resolves to a stub result. P2-proper
-            // dispatches to real tools and maps results back to the server as
-            // `role: "tool"` messages (nxm-tui's `Role` enum lacks a `Tool`
-            // variant — that wiring is deferred).
-            self.dispatch_tool_calls(app, tx, calls).await?;
+    pub fn new(
+        client: &'a Client,
+        base_url: &'a str,
+        model: &'a str,
+        initial_messages: Vec<Message>,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            model,
+            registry: default_registry(),
+            transcript: initial_messages,
+            in_thinking: false,
+            thinking_content: String::new(),
         }
     }
 
-    /// Stream one assistant turn; return any tool invocations emitted.
+    /// Run a full agentic turn: stream → resolve tool calls via `nexum-tools` →
+    /// append `role:"tool"` results → re-query; loops until the model stops.
+    /// Emits `ToolPart`s for live UI rendering.
+    pub async fn run(&mut self, tx: &mpsc::UnboundedSender<ToolPart>) -> Result<(), String> {
+        loop {
+            let calls = self.stream_turn(tx).await?;
+            if calls.is_empty() {
+                return Ok(());
+            }
+            self.dispatch_tool_calls(tx, calls).await?;
+        }
+    }
+
+    /// Stream one assistant turn; return tool invocations emitted by the model.
     async fn stream_turn(
-        &self,
-        app: &mut App,
+        &mut self,
         tx: &mpsc::UnboundedSender<ToolPart>,
     ) -> Result<Vec<ToolInvocation>, String> {
-        let api_messages = serialize_messages(&app.messages);
+        let api_messages = serialize_messages(&self.transcript);
         let body = serde_json::json!({
             "model": self.model,
             "messages": api_messages,
             "stream": true,
-            "tools": tools_spec(),
+            "tools": self.registry.manifest(),
         });
 
         let resp = self
@@ -120,23 +137,34 @@ impl<'a> Agent<'a> {
                     .and_then(|v| v.as_str())
                 {
                     if !content.is_empty() {
+                        // Absorb into the transcript (strips <thinking>), then
+                        // forward the raw delta to the main loop for live render.
+                        apply_token(
+                            &mut self.transcript,
+                            &mut self.in_thinking,
+                            &mut self.thinking_content,
+                            content,
+                        );
                         let _ = tx.send(ToolPart::Text(content.to_string()));
-                        app.push_token(content);
                     }
                 }
-                if let Some(arr) = json.pointer("/choices/0/delta/tool_calls").and_then(|v| v.as_array()) {
+                if let Some(arr) =
+                    json.pointer("/choices/0/delta/tool_calls").and_then(|v| v.as_array())
+                {
                     for tc in arr {
-                        if let Some(idx) = apply_tool_call_delta(
-                            pending.entry(0).or_insert_with(|| ToolInvocation {
+                        let entry = pending
+                            .entry(
+                                tc.get("index")
+                                    .and_then(|v| v.as_u64())
+                                    .map(|u| u as usize)
+                                    .unwrap_or(0),
+                            )
+                            .or_insert_with(|| ToolInvocation {
                                 id: String::new(),
                                 name: String::new(),
                                 args: String::new(),
-                            }),
-                            tc,
-                        ) {
-                            // re-borrow the freshly-merged invocation is in `pending`
-                            let _ = idx;
-                        }
+                            });
+                        let _ = apply_tool_call_delta(entry, tc);
                     }
                 }
             }
@@ -149,42 +177,47 @@ impl<'a> Agent<'a> {
         if !has_tool_calls {
             return Ok(Vec::new());
         }
-        let invocations: Vec<ToolInvocation> =
-            pending.into_iter().map(|(_, v)| v).collect();
-        for inv in &invocations {
-            let _ = tx.send(ToolPart::ToolInvocation(inv.clone()));
-        }
+        let invocations: Vec<ToolInvocation> = pending.into_iter().map(|(_, v)| v).collect();
         let parts: Vec<ToolPart> = invocations
             .iter()
             .map(|i| ToolPart::ToolInvocation(i.clone()))
             .collect();
-        app.messages
+        for inv in &invocations {
+            let _ = tx.send(ToolPart::ToolInvocation(inv.clone()));
+        }
+        self.transcript
             .push(Message::with_tool(Role::Assistant, parts));
         Ok(invocations)
     }
 
-    /// Spike: every tool call → a stub `ToolResult`. P2-proper runs the real tool.
+    /// Resolve each tool call through `nexum-tools` and record the results as
+    /// `role:"tool"` transcript messages + UI `ToolResult` parts.
     async fn dispatch_tool_calls(
-        &self,
-        app: &mut App,
+        &mut self,
         tx: &mpsc::UnboundedSender<ToolPart>,
         calls: Vec<ToolInvocation>,
     ) -> Result<(), String> {
         for inv in calls {
-            let result = ToolResult {
-                call_id: inv.id.clone(),
-                output: format!("stub result for tool `{}` (args: {})", inv.name, inv.args),
+            let args: Value = serde_json::from_str(&inv.args).unwrap_or_else(|e| {
+                serde_json::json!({ "_raw": &inv.args, "_parse_error": e.to_string() })
+            });
+            let output = match self.registry.call(&inv.name, &args) {
+                Ok(r) => r.content,
+                Err(e) => format!("tool dispatch error: {e}"),
             };
-            let _ = tx.send(ToolPart::ToolResult(result.clone()));
-            app.messages
-                .push(Message::with_tool(Role::Assistant, vec![ToolPart::ToolResult(result)]));
+            let tpart = ToolResult {
+                call_id: inv.id.clone(),
+                output: output.clone(),
+            };
+            let _ = tx.send(ToolPart::ToolResult(tpart));
+            self.transcript.push(Message::tool(&inv.id, output));
         }
         Ok(())
     }
 }
 
-/// One OpenAI tool_call delta → merge into an in-progress `ToolInvocation`.
-/// Returns the delta's `index` so the caller can key its pending map.
+/// Merge one OpenAI `tool_call` delta fragment into an in-progress invocation.
+/// Returns the delta's `index` (0 when absent).
 fn apply_tool_call_delta(inv: &mut ToolInvocation, tc: &Value) -> Option<usize> {
     let idx = tc.get("index").and_then(|v| v.as_u64()).map(|u| u as usize)?;
     if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
@@ -201,36 +234,44 @@ fn apply_tool_call_delta(inv: &mut ToolInvocation, tc: &Value) -> Option<usize> 
     Some(idx)
 }
 
-/// Serialize the transcript for the OpenAI `/chat/completions` request.
-/// Spike note: tool results carry no `role: "tool"` (nxm-tui `Role` lacks it);
-/// the stub records them as assistant `tool_parts` — full mapping is P2.
+/// Serialize the transcript for the OpenAI request, emitting `tool_calls` on
+/// assistant messages that carry invocations and `role:"tool"` for results.
 fn serialize_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()
-        .map(|m| {
-            let role = match m.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => "system",
-            };
-            serde_json::json!({ "role": role, "content": &m.content })
+        .map(|m| match m.role {
+            Role::User => serde_json::json!({ "role": "user", "content": &m.content }),
+            Role::System => serde_json::json!({ "role": "system", "content": &m.content }),
+            Role::Assistant => {
+                let invs: Vec<&ToolInvocation> = m
+                    .tool_parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ToolPart::ToolInvocation(i) => Some(i),
+                        _ => None,
+                    })
+                    .collect();
+                if invs.is_empty() {
+                    serde_json::json!({ "role": "assistant", "content": &m.content })
+                } else {
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &m.content,
+                        "tool_calls": invs.iter().map(|i| serde_json::json!({
+                            "id": &i.id,
+                            "type": "function",
+                            "function": { "name": &i.name, "arguments": &i.args }
+                        })).collect::<Vec<_>>()
+                    })
+                }
+            }
+            Role::Tool => serde_json::json!({
+                "role": "tool",
+                "tool_call_id": m.tool_call_id,
+                "content": &m.content,
+            }),
         })
         .collect()
-}
-
-/// Stub tool the model may emit (P2-proper registers the real set).
-fn tools_spec() -> Value {
-    serde_json::json!([{
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a file (stub).",
-            "parameters": {
-                "type": "object",
-                "properties": { "path": { "type": "string" } }
-            }
-        }
-    }])
 }
 
 #[cfg(test)]
@@ -258,7 +299,11 @@ mod tests {
 
     #[test]
     fn appends_argument_fragments_across_deltas() {
-        let mut inv = ToolInvocation { id: "call_1".into(), name: String::new(), args: "{\"p".into() };
+        let mut inv = ToolInvocation {
+            id: "call_1".into(),
+            name: String::new(),
+            args: "{\"p".into(),
+        };
         let delta = serde_json::json!({ "index": 0, "function": { "arguments": "ath\":\"b\"}" } });
         apply_tool_call_delta(&mut inv, &delta);
         assert_eq!(inv.args, "{\"path\":\"b\"}");
@@ -267,7 +312,11 @@ mod tests {
 
     #[test]
     fn ignores_non_tool_delta() {
-        let mut inv = ToolInvocation { id: String::new(), name: String::new(), args: String::new() };
+        let mut inv = ToolInvocation {
+            id: String::new(),
+            name: String::new(),
+            args: String::new(),
+        };
         let delta = serde_json::json!({ "index": 0 });
         let idx = apply_tool_call_delta(&mut inv, &delta);
         assert_eq!(idx, Some(0));

@@ -35,10 +35,11 @@ mod ui;
 // Utils module
 mod utils;
 
-use app::{App, RunState};
+use app::{App, Message, Role, RunState};
 use config::TuiConfig;
 use event::AppEvent;
 use handler::handle_key;
+use tool_types::ToolPart;
 use ui::render;
 
 fn main() -> io::Result<()> {
@@ -124,7 +125,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
     }
 
     // Main loop
-    let (token_tx, mut token_rx) = mpsc::unbounded_channel::<String>();
+    let (part_tx, mut part_rx) = mpsc::unbounded_channel::<ToolPart>();
     let mut inference_task: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
@@ -196,15 +197,15 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                     app.metrics.session_user_msgs += 1;
                     let base = app.endpoint.clone();
                     let client = reqwest::Client::new();
-                    let msgs = app.messages.clone();
-                    let tx = token_tx.clone();
+                    let model = cfg.model_name.clone().unwrap_or_else(|| "default".to_string());
+                    let initial_msgs = app.messages.clone();
+                    let tx = part_tx.clone();
 
                     inference_task = Some(tokio::spawn(async move {
-                        connection::chat_stream(&client, &base, &msgs, tx)
-                            .await
-                            .unwrap_or_else(|e| {
-                                tracing::error!("inference error: {e}");
-                            });
+                        let mut agent = agent::Agent::new(&client, &base, &model, initial_msgs);
+                        agent.run(&tx).await.unwrap_or_else(|e| {
+                            tracing::error!("agent error: {e}");
+                        });
                     }));
                 }
             }
@@ -215,8 +216,21 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                 app.check_server_health();
 
                 if matches!(app.state, RunState::Thinking) {
-                    while let Ok(text) = token_rx.try_recv() {
-                        app.push_token(&text);
+                    while let Ok(part) = part_rx.try_recv() {
+                        match part {
+                            ToolPart::Text(s) => app.push_token(&s),
+                            ToolPart::Reasoning(s) => app.append_thinking_delta(&s),
+                            ToolPart::ToolInvocation(inv) => {
+                                app.messages.push(Message::with_tool(
+                                    Role::Assistant,
+                                    vec![ToolPart::ToolInvocation(inv)],
+                                ));
+                            }
+                            ToolPart::ToolResult(res) => {
+                                app.messages.push(Message::tool(&res.call_id, res.output.clone()));
+                            }
+                            ToolPart::Error(e) => app.set_status(e),
+                        }
                     }
                     if let Some(ref handle) = inference_task {
                         if handle.is_finished() {

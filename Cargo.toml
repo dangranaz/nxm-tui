@@ -35,3 +35,7 @@ dirs = "6"
 shellexpand = "3"
 toml = "1"
 chrono = "0.4"
+
+# Pure-Rust tool actuators (web_search, read_file, list_resources).
+# Path dep for the P2-proprio spike; pin a cargo-release or git version later.
+nxm-tools = { path = "../nxm-tools" }

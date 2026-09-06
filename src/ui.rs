@@ -1,11 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, ModelRoleInfo, Role, RunState};
+use crate::app::{App, Role, RunState};
 use crate::sidebar::SidebarInfo;
 
 /// Sidebar threshold width - only show if terminal is wider than this.
@@ -338,6 +337,7 @@ fn render_context_overlay(f: &mut Frame, app: &App) {
             Role::User => "usr",
             Role::Assistant => "asst",
             Role::System => "sys",
+            Role::Tool => "tool",
         };
         let first_line = msg.content.lines().next().unwrap_or("");
         let preview: String = first_line.chars().take(30).collect();
