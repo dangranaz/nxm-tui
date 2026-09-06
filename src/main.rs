@@ -130,6 +130,12 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
 
     loop {
         if app.state == RunState::Quit {
+            // D4: cancel any in-flight agent stream on quit (Ctrl-C / Ctrl-Q)
+            // so no orphaned tokio task keeps the SSE channel open. The partial
+            // assistant message already lives in app.messages (not lost).
+            if let Some(handle) = inference_task.take() {
+                handle.abort();
+            }
             break;
         }
 
