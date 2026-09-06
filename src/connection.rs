@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::Message;
 
 #[allow(dead_code)]
+#[allow(dead_code)]
 pub async fn chat_stream(
     client: &Client,
     base_url: &str,

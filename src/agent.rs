@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use futures::StreamExt;
-use nxm_tools::{default_registry, Registry, ToolResult as NxToolResult};
+use nxm_tools::{default_registry, Registry};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::mpsc;
