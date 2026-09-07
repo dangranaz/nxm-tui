@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct TuiConfig {
     pub endpoint: Option<String>,
     pub model_name: Option<String>,
+    /// Bearer auth token for OpenAI/NVIDIA/Ollama-compatible servers.
+    /// `#[serde(skip)]` so it is NEVER persisted to `~/.nexum/tui.toml`.
+    #[serde(skip)]
+    pub api_key: Option<String>,
     /// Sidebar visible by default
     pub sidebar_open: Option<bool>,
     /// Max context tokens
@@ -17,6 +21,7 @@ impl Default for TuiConfig {
         Self {
             endpoint: None,
             model_name: None,
+            api_key: None,
             sidebar_open: Some(true),
             max_context: Some(8192),
         }
@@ -33,10 +38,19 @@ impl TuiConfig {
     /// Load config from file, or return defaults.
     pub fn load() -> Self {
         let path = Self::path();
-        std::fs::read_to_string(&path)
+        let mut cfg: Self = std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // `api_key` is serde-skipped (never on disk) — fill from env so the TUI
+        // can auth against NVIDIA/Ollama/OpenAI: `NEXUM_API_KEY` first, then the
+        // conventional `OPENAI_API_KEY`.
+        if cfg.api_key.is_none() {
+            cfg.api_key = std::env::var("NEXUM_API_KEY")
+                .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .ok();
+        }
+        cfg
     }
 
     /// Save config to file.

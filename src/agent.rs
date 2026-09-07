@@ -30,6 +30,7 @@ pub struct Agent<'a> {
     client: &'a Client,
     base_url: &'a str,
     model: &'a str,
+    api_key: Option<String>,
     registry: Registry,
     /// Growing transcript. Cloned from `app.messages` at spawn and evolved
     /// across turns (assistant tool-call messages + their `role:"tool"` results)
@@ -49,12 +50,14 @@ impl<'a> Agent<'a> {
         client: &'a Client,
         base_url: &'a str,
         model: &'a str,
+        api_key: Option<String>,
         initial_messages: Vec<Message>,
     ) -> Self {
         Self {
             client,
             base_url,
             model,
+            api_key,
             registry: default_registry(),
             transcript: initial_messages,
             in_thinking: false,
@@ -88,10 +91,14 @@ impl<'a> Agent<'a> {
             "tools": self.registry.manifest(),
         });
 
-        let resp = self
+        let mut req = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
-            .json(&body)
+            .json(&body);
+        if let Some(key) = &self.api_key {
+            req = req.header("authorization", format!("Bearer {}", key));
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -146,6 +153,17 @@ impl<'a> Agent<'a> {
                             content,
                         );
                         let _ = tx.send(ToolPart::Text(content.to_string()));
+                    }
+                }
+                // `reasoning_content` delta (o1 / QwQ / NVIDIA-Thinking /
+                // nemotron): forward raw to the UI thinking buffer so live
+                // reasoning renders without polluting the transcript.
+                if let Some(thinking) = json
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .and_then(|v| v.as_str())
+                {
+                    if !thinking.is_empty() {
+                        let _ = tx.send(ToolPart::Reasoning(thinking.to_string()));
                     }
                 }
                 if let Some(arr) =

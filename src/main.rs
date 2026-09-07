@@ -204,11 +204,14 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                     let base = app.endpoint.clone();
                     let client = reqwest::Client::new();
                     let model = cfg.model_name.clone().unwrap_or_else(|| "default".to_string());
+                    let api_key = cfg.api_key.clone();
                     let initial_msgs = app.messages.clone();
                     let tx = part_tx.clone();
 
                     inference_task = Some(tokio::spawn(async move {
-                        let mut agent = agent::Agent::new(&client, &base, &model, initial_msgs);
+                        let mut agent = agent::Agent::new(
+                            &client, &base, &model, api_key, initial_msgs,
+                        );
                         agent.run(&tx).await.unwrap_or_else(|e| {
                             tracing::error!("agent error: {e}");
                         });
