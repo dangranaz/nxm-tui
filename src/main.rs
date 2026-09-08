@@ -26,6 +26,7 @@ mod mode_bar;
 mod overlays;
 mod prompt;
 mod prompt_lines;
+mod provider;
 mod server_proc;
 mod session;
 mod sidebar;
@@ -149,7 +150,9 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                 if app.state == RunState::Connecting {
                     let url = app.endpoint.clone();
                     app.state = RunState::Running;
-                    app.server_name = server_name_from_url(&url);
+                    if app.server_name.is_empty() {
+                        app.server_name = server_name_from_url(&url, &cfg);
+                    }
                     cfg.endpoint = Some(url.clone());
                     cfg.save();
 
@@ -268,36 +271,35 @@ async fn detect_endpoint(cfg: &TuiConfig) -> Option<(String, String)> {
         let client = reqwest::Client::new();
         let resp = client.get(format!("{}/v1/models", url)).send().await;
         if resp.is_ok() {
-            return Some((url.clone(), server_name_from_url(url)));
+            return Some((url.clone(), server_name_from_url(url, cfg)));
         }
     }
 
-    // Try common endpoints
-    let endpoints = vec![
-        ("http://127.0.0.1:11434", "Nexum Local"),
-        ("http://127.0.0.1:11435", "Ollama"),
-        ("http://127.0.0.1:1234", "LM Studio"),
-    ];
-
+    // Try the known providers (presets + custom), skipping cloud ones which
+    // cannot be auto-detected without a key.
+    let providers = provider::all_providers(&cfg.providers);
     let client = reqwest::Client::new();
-    for (url, name) in endpoints {
-        let resp = client.get(format!("{}/v1/models", url)).send().await;
-        if resp.is_ok() {
-            return Some((url.to_string(), name.to_string()));
+    for p in providers {
+        if p.is_cloud {
+            continue;
+        }
+        // Probe the base as-is and with a /v1 suffix (bare Nexum host vs OpenAI dialect).
+        let candidates = [p.base_url.clone(), format!("{}/v1", p.base_url.trim_end_matches("/v1"))];
+        for base in candidates {
+            let resp = client.get(format!("{}/v1/models", base.trim_end_matches("/v1"))).send().await;
+            if resp.is_ok() {
+                return Some((p.base_url.clone(), p.name.clone()));
+            }
         }
     }
 
     None
 }
 
-fn server_name_from_url(url: &str) -> String {
-    if url.contains("11434") {
-        "Nexum Local".to_string()
-    } else if url.contains("11435") {
-        "Ollama".to_string()
-    } else if url.contains("1234") {
-        "LM Studio".to_string()
-    } else {
-        "Custom Server".to_string()
-    }
+fn server_name_from_url(url: &str, cfg: &TuiConfig) -> String {
+    provider::all_providers(&cfg.providers)
+        .into_iter()
+        .find(|p| p.base_url == url || p.base_url.trim_end_matches("/v1") == url.trim_end_matches("/v1"))
+        .map(|p| p.name)
+        .unwrap_or_else(|| "Custom Server".to_string())
 }

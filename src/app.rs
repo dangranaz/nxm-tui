@@ -130,8 +130,21 @@ pub enum Command {
     Compact,
     Sidebar,
     Server(ServerCommand),
+    Provider(ProviderCommand),
     Quit,
     Normal(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderCommand {
+    /// `/provider` — list available providers.
+    List,
+    /// `/provider add <name> <base_url>` — add/replace a custom provider.
+    Add { name: String, base_url: String },
+    /// `/provider use <name>` — select a provider as the active endpoint.
+    Use(String),
+    /// `/provider remove <name>` — remove a custom provider.
+    Remove(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,6 +239,29 @@ pub fn parse_command(input: &str) -> Command {
                     })
                 }
             }
+            _ => Command::Normal(input.to_string()),
+        },
+        "/provider" | "/prov" | "/p" => match tokens.get(1).copied() {
+            None | Some("list") | Some("ls") => Command::Provider(ProviderCommand::List),
+            Some("add") => {
+                // /provider add <name> <base_url> — name may be multi-word if
+                // quoted is not supported, so take token[2] as name, token[3] as url.
+                match (tokens.get(2), tokens.get(3)) {
+                    (Some(name), Some(url)) => Command::Provider(ProviderCommand::Add {
+                        name: name.to_string(),
+                        base_url: url.to_string(),
+                    }),
+                    _ => Command::Normal(input.to_string()),
+                }
+            }
+            Some("use") | Some("select") => match tokens.get(2) {
+                Some(name) => Command::Provider(ProviderCommand::Use(name.to_string())),
+                None => Command::Normal(input.to_string()),
+            },
+            Some("remove") | Some("rm") | Some("del") => match tokens.get(2) {
+                Some(name) => Command::Provider(ProviderCommand::Remove(name.to_string())),
+                None => Command::Normal(input.to_string()),
+            },
             _ => Command::Normal(input.to_string()),
         },
         _ => Command::Normal(input.to_string()),
