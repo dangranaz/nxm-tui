@@ -21,6 +21,10 @@ static COMMANDS: &[(&str, &str)] = &[
     ("/metrics", "Show metrics"),
     ("/context", "Set context limit"),
     ("/sidebar", "Toggle sidebar"),
+    ("/provider list", "List LLM providers"),
+    ("/provider add", "Add a custom provider: /provider add <name> <url>"),
+    ("/provider use", "Select a provider: /provider use <name>"),
+    ("/provider remove", "Remove a custom provider: /provider remove <name>"),
 ];
 
 /// Score match quality (higher = better).

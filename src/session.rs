@@ -52,6 +52,7 @@ pub fn save_session(name: &str, messages: &[Message], mode: AgentMode) -> Result
                 Role::User => "user",
                 Role::Assistant => "assistant",
                 Role::System => "system",
+                Role::Tool => "tool",
             },
             "content": m.content,
         })).collect::<Vec<_>>(),
@@ -83,6 +84,7 @@ pub fn load_session(name: &str) -> Result<(Vec<Message>, AgentMode), String> {
                         "user" => Role::User,
                         "assistant" => Role::Assistant,
                         "system" => Role::System,
+                        "tool" => Role::Tool,
                         _ => return None,
                     };
                     let content = v["content"].as_str()?.to_string();

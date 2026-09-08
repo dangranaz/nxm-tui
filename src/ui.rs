@@ -1,11 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, ModelRoleInfo, Role, RunState};
+use crate::app::{App, Role, RunState};
 use crate::sidebar::SidebarInfo;
 
 /// Sidebar threshold width - only show if terminal is wider than this.
@@ -84,7 +83,10 @@ fn render_chat(f: &mut Frame, app: &App) {
 fn render_no_server(f: &mut Frame) {
     let area = f.area();
     let y = area.height / 3;
-    let lines = vec![
+    let cfg = crate::config::TuiConfig::load();
+    let providers = crate::provider::all_providers(&cfg.providers);
+
+    let mut lines = vec![
         Line::from(Span::styled(
             "Server non attivo",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -95,29 +97,37 @@ fn render_no_server(f: &mut Frame) {
             Style::default().fg(Color::White),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  [1] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Nexum Inferentia   (localhost:11434)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  [2] ", Style::default().fg(Color::Cyan)),
-            Span::raw("Ollama      (localhost:11435)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  [3] ", Style::default().fg(Color::Cyan)),
-            Span::raw("LM Studio   (localhost:1234)"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  /server start per avviare il server locale",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled("  Ctrl+Q per uscire", Style::default().fg(Color::DarkGray))),
     ];
+    for (i, p) in providers.iter().enumerate() {
+        let key = i + 1; // menu keys are 1-based; only 1-9 are selectable
+        let mut label = format!("{}   ({})", p.name, p.base_url);
+        if p.requires_api_key {
+            label.push_str("  [key]");
+        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("  [{key}] "), Style::default().fg(Color::Cyan)),
+            Span::raw(label),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  /provider add <nome> <url>  per aggiungere un provider",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  /server start per avviare il server locale",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Ctrl+Q per uscire",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let width = 64u16;
     let block_area = Rect::new(
-        area.width.saturating_sub(50) / 2,
+        area.width.saturating_sub(width) / 2,
         y,
-        50.min(area.width),
+        width.min(area.width),
         lines.len() as u16,
     );
     f.render_widget(Paragraph::new(lines), block_area);
@@ -338,6 +348,7 @@ fn render_context_overlay(f: &mut Frame, app: &App) {
             Role::User => "usr",
             Role::Assistant => "asst",
             Role::System => "sys",
+            Role::Tool => "tool",
         };
         let first_line = msg.content.lines().next().unwrap_or("");
         let preview: String = first_line.chars().take(30).collect();

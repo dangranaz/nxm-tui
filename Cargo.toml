@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Terminal client for NXM — connects to any OpenAI-compatible LLM server"
-repository = "https://github.com/nxm-ai/nxm-tui"
+repository = "https://github.com/dangranaz/nxm-tui"
 
 [[bin]]
 name = "nxm-tui"
@@ -35,3 +35,9 @@ dirs = "6"
 shellexpand = "3"
 toml = "1"
 chrono = "0.4"
+
+# Pure-Rust tool actuators (web_search, read_file, list_resources).
+# Public git dependency pinned to a release tag so CI and end users can build
+# without a local checkout. For local development against a sibling checkout,
+# see `.cargo/config.toml` (git-ignored) — it patches this to ../nxm-tools.
+nxm-tools = { git = "https://github.com/dangranaz/nxm-tools.git", tag = "v0.1.0" }
