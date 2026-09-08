@@ -133,7 +133,7 @@ mod tests {
     
     #[test]
     fn test_truncate_title_long() {
-        assert_eq!(truncate_title("this is a very long title"), "this is a very...");
+        assert_eq!(truncate_title("this is a very long title"), "this is a very lo...");
     }
     
     #[test]

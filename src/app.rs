@@ -38,15 +38,27 @@ pub struct Message {
     pub content: String,
     /// Optional tool parts for tool call output.
     pub tool_parts: Vec<crate::tool_types::ToolPart>,
+    /// `tool_call_id` for `role: "tool"` messages (OpenAI round-trip).
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
     pub fn new(role: Role, content: String) -> Self {
-        Self { role, content, tool_parts: Vec::new() }
+        Self { role, content, tool_parts: Vec::new(), tool_call_id: None }
     }
 
     pub fn with_tool(role: Role, parts: Vec<crate::tool_types::ToolPart>) -> Self {
-        Self { role, content: String::new(), tool_parts: parts }
+        Self { role, content: String::new(), tool_parts: parts, tool_call_id: None }
+    }
+
+    /// A `role: "tool"` result message carrying the assistant `tool_call_id`.
+    pub fn tool(call_id: &str, content: String) -> Self {
+        Self {
+            role: Role::Tool,
+            content,
+            tool_parts: Vec::new(),
+            tool_call_id: Some(call_id.to_string()),
+        }
     }
 }
 
@@ -55,6 +67,52 @@ pub enum Role {
     User,
     Assistant,
     System,
+    Tool,
+}
+
+/// Absorb one token delta into `messages`, filtering `<thinking>` tags into
+/// `thinking` (stateful via `in_thinking`) and otherwise appending to the last
+/// assistant message. Shared by `App::push_token` (main loop) and
+/// `agent::Agent` (its transcript) so `<thinking>` handling stays consistent
+/// between the live UI and the transcript the agent re-serializes.
+pub(crate) fn apply_token(
+    messages: &mut Vec<Message>,
+    in_thinking: &mut bool,
+    thinking: &mut String,
+    token: &str,
+) {
+    if token == "<" || token == "thinking" || token == ">" || token == "/thinking" {
+        return;
+    }
+    if *in_thinking {
+        if token.contains('>') {
+            *in_thinking = false;
+            return;
+        }
+        thinking.push_str(token);
+        return;
+    }
+    if token.contains("<thinking>") {
+        *in_thinking = true;
+        let parts: Vec<&str> = token.split("<thinking>").collect();
+        if parts.len() > 1 && !parts[0].is_empty() {
+            if let Some(last_msg) = messages.last_mut() {
+                if last_msg.role == Role::Assistant {
+                    last_msg.content.push_str(parts[0]);
+                    return;
+                }
+            }
+            messages.push(Message::new(Role::Assistant, parts[0].to_string()));
+        }
+        return;
+    }
+    if let Some(last_msg) = messages.last_mut() {
+        if last_msg.role == Role::Assistant {
+            last_msg.content.push_str(token);
+            return;
+        }
+    }
+    messages.push(Message::new(Role::Assistant, token.to_string()));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,8 +130,21 @@ pub enum Command {
     Compact,
     Sidebar,
     Server(ServerCommand),
+    Provider(ProviderCommand),
     Quit,
     Normal(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderCommand {
+    /// `/provider` — list available providers.
+    List,
+    /// `/provider add <name> <base_url>` — add/replace a custom provider.
+    Add { name: String, base_url: String },
+    /// `/provider use <name>` — select a provider as the active endpoint.
+    Use(String),
+    /// `/provider remove <name>` — remove a custom provider.
+    Remove(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +239,29 @@ pub fn parse_command(input: &str) -> Command {
                     })
                 }
             }
+            _ => Command::Normal(input.to_string()),
+        },
+        "/provider" | "/prov" | "/p" => match tokens.get(1).copied() {
+            None | Some("list") | Some("ls") => Command::Provider(ProviderCommand::List),
+            Some("add") => {
+                // /provider add <name> <base_url> — name may be multi-word if
+                // quoted is not supported, so take token[2] as name, token[3] as url.
+                match (tokens.get(2), tokens.get(3)) {
+                    (Some(name), Some(url)) => Command::Provider(ProviderCommand::Add {
+                        name: name.to_string(),
+                        base_url: url.to_string(),
+                    }),
+                    _ => Command::Normal(input.to_string()),
+                }
+            }
+            Some("use") | Some("select") => match tokens.get(2) {
+                Some(name) => Command::Provider(ProviderCommand::Use(name.to_string())),
+                None => Command::Normal(input.to_string()),
+            },
+            Some("remove") | Some("rm") | Some("del") => match tokens.get(2) {
+                Some(name) => Command::Provider(ProviderCommand::Remove(name.to_string())),
+                None => Command::Normal(input.to_string()),
+            },
             _ => Command::Normal(input.to_string()),
         },
         _ => Command::Normal(input.to_string()),
@@ -458,43 +552,12 @@ impl App {
     }
 
     pub fn push_token(&mut self, token: &str) {
-        // Filter reasoning tokens (Ollama puts thinking in <thinking>...</thinking> tags)
-        if token == "<" || token == "thinking" || token == ">" || token == "/thinking" {
-            return;
-        }
-
-        if self.in_thinking {
-            if token.contains('>') {
-                self.in_thinking = false;
-                return;
-            }
-            self.thinking_content.push_str(token);
-            return;
-        }
-
-        if token.contains("<thinking>") {
-            self.in_thinking = true;
-            let parts: Vec<&str> = token.split("<thinking>").collect();
-            if parts.len() > 1 && !parts[0].is_empty() {
-                if let Some(last_msg) = self.messages.last_mut() {
-                    if last_msg.role == Role::Assistant {
-                        last_msg.content.push_str(parts[0]);
-                        return;
-                    }
-                }
-                self.messages.push(Message::new(Role::Assistant, parts[0].to_string()));
-            }
-            return;
-        }
-
-        // Find the last assistant message or create one
-        if let Some(last_msg) = self.messages.last_mut() {
-            if last_msg.role == Role::Assistant {
-                last_msg.content.push_str(token);
-                return;
-            }
-        }
-        self.messages.push(Message::new(Role::Assistant, token.to_string()));
+        apply_token(
+            &mut self.messages,
+            &mut self.in_thinking,
+            &mut self.thinking_content,
+            token,
+        );
     }
 
     pub fn context_pct(&self) -> f64 {

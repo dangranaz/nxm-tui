@@ -26,6 +26,7 @@ mod mode_bar;
 mod overlays;
 mod prompt;
 mod prompt_lines;
+mod provider;
 mod server_proc;
 mod session;
 mod sidebar;
@@ -35,10 +36,11 @@ mod ui;
 // Utils module
 mod utils;
 
-use app::{App, RunState};
+use app::{App, Message, Role, RunState};
 use config::TuiConfig;
 use event::AppEvent;
 use handler::handle_key;
+use tool_types::ToolPart;
 use ui::render;
 
 fn main() -> io::Result<()> {
@@ -124,11 +126,17 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
     }
 
     // Main loop
-    let (token_tx, mut token_rx) = mpsc::unbounded_channel::<String>();
+    let (part_tx, mut part_rx) = mpsc::unbounded_channel::<ToolPart>();
     let mut inference_task: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         if app.state == RunState::Quit {
+            // D4: cancel any in-flight agent stream on quit (Ctrl-C / Ctrl-Q)
+            // so no orphaned tokio task keeps the SSE channel open. The partial
+            // assistant message already lives in app.messages (not lost).
+            if let Some(handle) = inference_task.take() {
+                handle.abort();
+            }
             break;
         }
 
@@ -142,7 +150,9 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                 if app.state == RunState::Connecting {
                     let url = app.endpoint.clone();
                     app.state = RunState::Running;
-                    app.server_name = server_name_from_url(&url);
+                    if app.server_name.is_empty() {
+                        app.server_name = server_name_from_url(&url, &cfg);
+                    }
                     cfg.endpoint = Some(url.clone());
                     cfg.save();
 
@@ -196,15 +206,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                     app.metrics.session_user_msgs += 1;
                     let base = app.endpoint.clone();
                     let client = reqwest::Client::new();
-                    let msgs = app.messages.clone();
-                    let tx = token_tx.clone();
+                    let model = cfg.model_name.clone().unwrap_or_else(|| "default".to_string());
+                    let api_key = cfg.api_key.clone();
+                    let initial_msgs = app.messages.clone();
+                    let tx = part_tx.clone();
 
                     inference_task = Some(tokio::spawn(async move {
-                        connection::chat_stream(&client, &base, &msgs, tx)
-                            .await
-                            .unwrap_or_else(|e| {
-                                tracing::error!("inference error: {e}");
-                            });
+                        let mut agent = agent::Agent::new(
+                            &client, &base, &model, api_key, initial_msgs,
+                        );
+                        agent.run(&tx).await.unwrap_or_else(|e| {
+                            tracing::error!("agent error: {e}");
+                        });
                     }));
                 }
             }
@@ -215,8 +228,21 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resul
                 app.check_server_health();
 
                 if matches!(app.state, RunState::Thinking) {
-                    while let Ok(text) = token_rx.try_recv() {
-                        app.push_token(&text);
+                    while let Ok(part) = part_rx.try_recv() {
+                        match part {
+                            ToolPart::Text(s) => app.push_token(&s),
+                            ToolPart::Reasoning(s) => app.append_thinking_delta(&s),
+                            ToolPart::ToolInvocation(inv) => {
+                                app.messages.push(Message::with_tool(
+                                    Role::Assistant,
+                                    vec![ToolPart::ToolInvocation(inv)],
+                                ));
+                            }
+                            ToolPart::ToolResult(res) => {
+                                app.messages.push(Message::tool(&res.call_id, res.output.clone()));
+                            }
+                            ToolPart::Error(e) => app.set_status(e),
+                        }
                     }
                     if let Some(ref handle) = inference_task {
                         if handle.is_finished() {
@@ -245,36 +271,35 @@ async fn detect_endpoint(cfg: &TuiConfig) -> Option<(String, String)> {
         let client = reqwest::Client::new();
         let resp = client.get(format!("{}/v1/models", url)).send().await;
         if resp.is_ok() {
-            return Some((url.clone(), server_name_from_url(url)));
+            return Some((url.clone(), server_name_from_url(url, cfg)));
         }
     }
 
-    // Try common endpoints
-    let endpoints = vec![
-        ("http://127.0.0.1:11434", "Nexum Local"),
-        ("http://127.0.0.1:11435", "Ollama"),
-        ("http://127.0.0.1:1234", "LM Studio"),
-    ];
-
+    // Try the known providers (presets + custom), skipping cloud ones which
+    // cannot be auto-detected without a key.
+    let providers = provider::all_providers(&cfg.providers);
     let client = reqwest::Client::new();
-    for (url, name) in endpoints {
-        let resp = client.get(format!("{}/v1/models", url)).send().await;
-        if resp.is_ok() {
-            return Some((url.to_string(), name.to_string()));
+    for p in providers {
+        if p.is_cloud {
+            continue;
+        }
+        // Probe the base as-is and with a /v1 suffix (bare Nexum host vs OpenAI dialect).
+        let candidates = [p.base_url.clone(), format!("{}/v1", p.base_url.trim_end_matches("/v1"))];
+        for base in candidates {
+            let resp = client.get(format!("{}/v1/models", base.trim_end_matches("/v1"))).send().await;
+            if resp.is_ok() {
+                return Some((p.base_url.clone(), p.name.clone()));
+            }
         }
     }
 
     None
 }
 
-fn server_name_from_url(url: &str) -> String {
-    if url.contains("11434") {
-        "Nexum Local".to_string()
-    } else if url.contains("11435") {
-        "Ollama".to_string()
-    } else if url.contains("1234") {
-        "LM Studio".to_string()
-    } else {
-        "Custom Server".to_string()
-    }
+fn server_name_from_url(url: &str, cfg: &TuiConfig) -> String {
+    provider::all_providers(&cfg.providers)
+        .into_iter()
+        .find(|p| p.base_url == url || p.base_url.trim_end_matches("/v1") == url.trim_end_matches("/v1"))
+        .map(|p| p.name)
+        .unwrap_or_else(|| "Custom Server".to_string())
 }

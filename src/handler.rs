@@ -37,20 +37,18 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 
     if app.state == RunState::NoServer {
-        match key.code {
-            KeyCode::Char('1') => {
-                app.endpoint = "http://127.0.0.1:11434".into();
-                app.state = RunState::Connecting;
+        if let KeyCode::Char(c) = key.code {
+            if let Some(idx) = c.to_digit(10) {
+                if idx >= 1 {
+                    let cfg = crate::config::TuiConfig::load();
+                    let providers = crate::provider::all_providers(&cfg.providers);
+                    if let Some(p) = providers.get((idx - 1) as usize) {
+                        app.endpoint = p.base_url.clone();
+                        app.server_name = p.name.clone();
+                        app.state = RunState::Connecting;
+                    }
+                }
             }
-            KeyCode::Char('2') => {
-                app.endpoint = "http://127.0.0.1:11435".into();
-                app.state = RunState::Connecting;
-            }
-            KeyCode::Char('3') => {
-                app.endpoint = "http://127.0.0.1:1234".into();
-                app.state = RunState::Connecting;
-            }
-            _ => {}
         }
         return;
     }
@@ -312,6 +310,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                         }
                     }
                 }
+                Command::Provider(pcmd) => {
+                    handle_provider_command(app, pcmd);
+                }
                 Command::Normal(text) => {
                     if let Some(sys) = app.system_prompt_for_mode() {
                         if !app.messages.iter().any(|m| {
@@ -392,5 +393,67 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         _ => {}
+    }
+}
+
+/// Handle `/provider` subcommands: list, add, use, remove. Uses `TuiConfig`
+/// on demand (same pattern as `/config`) so custom providers persist to disk.
+fn handle_provider_command(app: &mut App, pcmd: crate::app::ProviderCommand) {
+    use crate::app::ProviderCommand;
+    use crate::provider::{all_providers, find_provider, Provider};
+
+    let mut cfg = crate::config::TuiConfig::load();
+    match pcmd {
+        ProviderCommand::List => {
+            let names: Vec<String> = all_providers(&cfg.providers)
+                .into_iter()
+                .map(|p| {
+                    let active = if p.base_url == app.endpoint { "*" } else { "" };
+                    let key = if p.requires_api_key { " (key)" } else { "" };
+                    format!("{}{}{}", active, p.name, key)
+                })
+                .collect();
+            tracing::info!(target: "nexum::provider::list", count = names.len(), "listed providers");
+            app.set_status(format!("Providers: {}", names.join(", ")));
+        }
+        ProviderCommand::Add { name, base_url } => match Provider::custom(&name, &base_url) {
+            Ok(p) => {
+                tracing::info!(target: "nexum::provider::add", name = %p.name, url = %p.base_url, "added provider");
+                cfg.upsert_provider(p);
+                app.set_status(format!("Provider added: {name} ({base_url})"));
+            }
+            Err(e) => {
+                tracing::warn!(target: "nexum::provider::add", error = %e, "invalid provider");
+                app.set_status(format!("Provider error: {e}"));
+            }
+        },
+        ProviderCommand::Use(name) => match find_provider(&name, &cfg.providers) {
+            Some(p) => {
+                app.endpoint = p.base_url.clone();
+                app.server_name = p.name.clone();
+                app.state = RunState::Connecting;
+                cfg.endpoint = Some(p.base_url.clone());
+                cfg.save();
+                if p.requires_api_key && cfg.api_key.is_none() {
+                    let hint = p
+                        .api_key_env
+                        .as_deref()
+                        .unwrap_or("NEXUM_API_KEY");
+                    app.set_status(format!("Using {} — set ${hint} for auth", p.name));
+                } else {
+                    app.set_status(format!("Using provider: {}", p.name));
+                }
+                tracing::info!(target: "nexum::provider::use", name = %p.name, url = %p.base_url, "selected provider");
+            }
+            None => app.set_status(format!("Unknown provider: {name}")),
+        },
+        ProviderCommand::Remove(name) => {
+            if cfg.remove_provider(&name) {
+                tracing::info!(target: "nexum::provider::remove", name = %name, "removed provider");
+                app.set_status(format!("Provider removed: {name}"));
+            } else {
+                app.set_status(format!("Not a custom provider: {name}"));
+            }
+        }
     }
 }
