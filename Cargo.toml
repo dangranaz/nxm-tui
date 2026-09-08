@@ -38,11 +38,6 @@ chrono = "0.4"
 
 # Pure-Rust tool actuators (web_search, read_file, list_resources).
 # Public git dependency pinned to a release tag so CI and end users can build
-# without a local checkout. Local development is served by the [patch] below.
+# without a local checkout. For local development against a sibling checkout,
+# see `.cargo/config.toml` (git-ignored) — it patches this to ../nxm-tools.
 nxm-tools = { git = "https://github.com/dangranaz/nxm-tools.git", tag = "v0.1.0" }
-
-# Local-only override: while developing on this machine, build against the
-# sibling checkout in ../nxm-tools instead of the pinned tag. This block is
-# ignored by anyone who does not have that path, so CI/users use the git tag.
-[patch."https://github.com/dangranaz/nxm-tools.git"]
-nxm-tools = { path = "../nxm-tools" }
