@@ -1,0 +1,20 @@
+[package]
+name = "nxm-tui-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust tool implementations (web_search, read_file, list_resources) for the Nexum agentic TUI."
+repository.workspace = true
+
+[lib]
+name = "nxm_tui_tools"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+anyhow.workspace = true
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
