@@ -1,0 +1,104 @@
+[workspace]
+resolver = "2"
+members = ["nxm-tui-tools"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/dangranaz/nxm-tui"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+regex = "1.13.1"
+
+[package]
+name = "nxm-tui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Terminal client for NXM — connects to any OpenAI-compatible LLM server"
+repository = "https://github.com/dangranaz/nxm-tui"
+
+[[bin]]
+name = "nxm-tui"
+path = "src/main.rs"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "process"] }
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling (workspace-pinned)
+anyhow = { workspace = true }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# Utilities
+dirs = "6"
+shellexpand = "3"
+toml = "1"
+chrono = "0.4"
+regex = "1.13.1"
+# Cell-width text layout (V1): CJK/emoji occupy two columns, so markdown
+# wrapping/truncation must measure display width, never bytes or char counts.
+# Pinned to the copy already resolved in Cargo.lock (via unicode-truncate).
+unicode-width = "0.2.0"
+
+# Syntax highlighting for code fences (V2): pure-Rust via fancy-regex (no
+# onig/C compiler), pinned exactly. Only `default-fancy` — no `onig`,
+# no `default`, no `syntect-tui`.
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+
+# Rich markdown rendering (V3): adopting grok-build's renderer
+# (xai-grok-markdown, Apache-2.0) — a pulldown-cmark pipeline producing styled
+# ratatui output. Copy-identical in behaviour but 100% pure-Rust: syntect stays
+# on `default-fancy` (no onig/C), styles bridged via anstyle. Pins exact
+# (RULES.md). All crates MIT or MIT/Apache-2.0.
+pulldown-cmark = "0.13.4"
+anstyle = "1.0.11"
+anstyle-syntect = "1.0.5"
+anstyle-lossy = "1.1.4"
+textwrap = "0.16.2"
+unicode-segmentation = "1.12.0"
+linkify = "0.10.0"
+url = "2.5.4"
+html-escape = "0.2.13"
+supports-color = "3.0.2"
+
+# Dev-friendly key loading: load a local .env when present (gitignored).
+dotenvy = "0.15.7"
+
+# Keychain access (Rust 1.88+)
+keyring = "4.2.0"
+
+# Portable encrypted keystore (I1): AES-256-GCM + Argon2id KDF + zeroize memory
+# hygiene. All RustCrypto, MIT/Apache-2.0, pinned exactly. `rand` matches the
+# version already pulled transitively (0.10) to avoid duplicate copies.
+aes-gcm = "0.11.1"
+argon2 = "0.6.0"
+zeroize = { version = "1.9.0", features = ["derive"] }
+rand = "0.10.3"
+
+# Pure-Rust tool actuators (web_search, read_file, list_resources).
+# Now a workspace member (moved here from nxm-mcp-servers). Kept importable as
+# `nxm_tools` via package rename so existing `use nxm_tools::...` keeps working.
+nxm-tui-tools = { path = "nxm-tui-tools" }
+
+[dev-dependencies]
+keyring-core = "1.0"

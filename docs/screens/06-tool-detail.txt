@@ -1,0 +1,38 @@
+ OC • unnamed                              M Developer 2 msgs [░░░░░░░░ 0.1K/8K] model: qwen2.5:1.5b
+ —                                         ▶ grep {"pattern": "fn render", "path": "src"}
+
+~/nxm-tui/work/loopeng-01-03-continue-afte
+                                           ◀ tool src/ui.rs:13:pub fn render(f: &mut Frame, app: &mut App) {src/overlays.rs:20:pub
+
+                             ┌──────────────────────────────────────────────────────────────────────┐
+                             │ Tool detail                                                          │
+                             │                                                                      │
+                             │  grep  id:call_7                                                     │
+                             │                                                                      │
+                             │  Args                                                                │
+                             │    {"pattern": "fn render", "path": "src"}                           │
+                             │                                                                      │
+                             │  Output                                                              │
+                             │    src/ui.rs:13:pub fn render(f: &mut Frame, app: &mut App) {        │
+                             │    src/overlays.rs:20:pub fn render_help(f: &mut Frame, app: &App)…  │
+                             │    src/tool_overlay.rs:9:pub fn render_tool(f: &mut Frame, app: &A…  │
+                             │                                                                      │
+                             │  Ctrl+O  toggle  ·  Esc  close                                       │
+                             │                                                                      │
+                             │                                                                      │
+                             │                                                                      │
+                             │                                                                      │
+                             │                                                                      │
+                             └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+                                          ────────────────────────────────────────────────────────────────────────────────────────
+                                          > ...  (/help for commands)
+                                          ────────────────────────────────────────────────────────────────────────────────────────
+                                           Model Indexer: — Status: Unavailable~/nxm-tui [work/loopeng-01-03-continue-after-halt]
+                                           Model Router: — Status: Unavailable                               Context: [0.1K/8K]
+                                           Model Worker: — Status: Unavailable                                     Nexum v0.1.0

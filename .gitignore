@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.DS_Store
+/.cargo/config.toml
+# Runtime session registry/archives written by the MCP session server
+/sessions
+# Local development API keys — NEVER commit (use .env.example as template)
+/.env
+# Delegation briefs — process material for external coding agents, not product
+/prompts
+# Local tool settings (poolside, etc.) — machine-local, may contain secrets
+/.poolside

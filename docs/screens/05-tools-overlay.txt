@@ -1,0 +1,38 @@
+ OC • unnamed                              M Developer 1 msgs [░░░░░░░░ 0.0K/8K] model: qwen2.5:1.5b
+ —                                        1. Refactor the parser module.
+
+~/nxm-tui/work/loopeng-01-03-continue-afte
+
+
+
+                                     ┌──────────────────────────────────────────────────────┐
+                                     │ Tools                                                │
+                                     │                                                      │
+                                     │> [ ] read_file                                       │
+                                     │  [ ] list_resources                                  │
+                                     │  [ ] web_search                                      │
+                                     │  [ ] web_fetch                                       │
+                                     │  [ ] grep                                            │
+                                     │  [ ] search_replace                                  │
+                                     │  [ ] todo                                            │
+                                     │  [ ] update_goal                                     │
+                                     │  [ ] enter_plan_mode                                 │
+                                     │  [ ] exit_plan_mode                                  │
+                                     │                                                      │
+                                     │  Space toggle  a all  n none  Esc close              │
+                                     └──────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+                                          ────────────────────────────────────────────────────────────────────────────────────────
+                                          > ...  (/help for commands)
+                                          ────────────────────────────────────────────────────────────────────────────────────────
+                                           Model Indexer: — Status: Unavailable~/nxm-tui [work/loopeng-01-03-continue-after-halt]
+                                           Model Router: — Status: Unavailable                               Context: [0.0K/8K]
+                                           Model Worker: — Status: Unavailable                                     Nexum v0.1.0

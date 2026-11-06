@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_CHECK_ARGS: ""
+
+jobs:
+  check:
+    name: Check & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check --all-targets ${{ env.CARGO_CHECK_ARGS }}
+      - name: cargo clippy
+        run: cargo clippy --all-targets ${{ env.CARGO_CHECK_ARGS }} -- -D warnings
+      - name: cargo test
+        run: cargo test ${{ env.CARGO_CHECK_ARGS }}
